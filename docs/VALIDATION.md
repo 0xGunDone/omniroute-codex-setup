@@ -16,7 +16,7 @@ Checked on 2026-10-27 (Europe/Moscow).
 | Native search route / Маршрут поиска | Clean gateway returned400 validation for empty `/v1/alpha/search`; presence only, not live account entitlement. |
 | Screenshots / Скриншоты | Real clean local gateway UI, RU and EN locales. No real upstream account or token in screenshots. Demo port21280. |
 
-Tests in GitHub Actions run on Linux/macOS/Windows. Unit tests validate transformations; they do not replace an actual Windows Desktop installation or provider OAuth flow. Full live search/image generation is not asserted for every client/account/build combination.
+The helper passes21 local regression tests. GitHub Actions is configured for Linux/macOS/Windows; inspect the workflow run for its current results. Unit tests validate transformations; they do not replace an actual Windows Desktop installation or provider OAuth flow. Full live search/image generation is not asserted for every client/account/build combination.
 
 The server demo used1GiB heap/2GiB container for dashboard screenshots. Production helper defaults to8GiB heap/10GiB container per upstream coding-agent guidance. Never treat the small demo budget as a long-context coding recommendation.
 
