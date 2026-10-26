@@ -1,0 +1,4 @@
+interface:
+  display_name: "OmniRoute + Codex Setup"
+  short_description: "Install OmniRoute and preserve existing Codex chats"
+  default_prompt: "Use $install-omniroute-codex to install OmniRoute and connect my Codex while preserving local chats and model choices."

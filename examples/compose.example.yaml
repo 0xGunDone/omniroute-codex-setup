@@ -1,0 +1,19 @@
+# Real installation: setup.py server generates fresh secrets in private .env.
+services:
+  omniroute:
+    image: diegosouzapw/omniroute:3.8.52
+    restart: unless-stopped
+    stop_grace_period: 60s
+    ports:
+      - "127.0.0.1:20128:20128"
+    env_file: .env
+    environment:
+      HOSTNAME: 0.0.0.0
+      DATA_DIR: /app/data
+      REQUIRE_API_KEY: "true"
+      OMNIROUTE_MEMORY_MB: "8192"
+    mem_limit: 10g
+    volumes:
+      - omniroute-data:/app/data
+volumes:
+  omniroute-data:

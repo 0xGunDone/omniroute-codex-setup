@@ -1,0 +1,26 @@
+# EXAMPLE ONLY: merge these entries; never replace your whole existing config.
+model_provider = "omniroute"
+model = "codex/gpt-6.1-sol"
+model_reasoning_effort = "max"
+cli_auth_credentials_store = "file"
+# Replace with an ABSOLUTE path on your computer.
+model_catalog_json = "/ABSOLUTE/PATH/TO/.codex/omniroute-model-catalog.json"
+
+[model_providers.omniroute]
+name = "OmniRoute"
+base_url = "http://127.0.0.1:20128/v1"
+wire_api = "responses"
+requires_openai_auth = false
+experimental_bearer_token = "REPLACE_WITH_YOUR_OMNIROUTE_KEY"
+
+# Optional, version-dependent native tools. Same router key; NEVER a ChatGPT token.
+[model_providers.omniroute.http_headers]
+x-openai-actor-authorization = "Bearer REPLACE_WITH_YOUR_OMNIROUTE_KEY"
+
+[features]
+image_generation = true
+
+# Optional: new subagents use selected model. Requires a compatible Codex build.
+[agents]
+default_subagent_model = "codex/gpt-6.1-sol"
+default_subagent_reasoning_effort = "max"

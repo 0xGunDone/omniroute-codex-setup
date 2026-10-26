@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+!.env.example
+.playwright-cli/
+output/
+auth.json
+config.toml
+*.sqlite*
+*browser-state*
+*backups*/
