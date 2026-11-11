@@ -54,9 +54,9 @@ The demo used 1 GiB heap / 2 GiB container for screenshots. Production helper de
 
 ## Hosted CI and platform limits / CI и ограничения платформ
 
-GitHub Actions is configured for Linux/macOS/Windows. During original publication on 27 October, dispatch was rejected with `HTTP 422: Actions has been disabled for this user.` That historical result does not prove whether the account restriction is still active; inspect current run results. No Windows CI or actual Windows Desktop/OAuth success is claimed here. Unit tests do not replace those checks.
+GitHub Actions is configured for Linux/macOS/Windows. Dispatch was rejected on 27 October and again after this update on **11 November** with `HTTP 422: Actions has been disabled for this user.` Repository Actions permissions report enabled, but this account-level restriction still prevents execution. No Windows CI or actual Windows Desktop/OAuth success is claimed here. Unit tests do not replace those checks.
 
-GitHub Actions настроен на Linux/macOS/Windows. При первой публикации 27 октября запуск был отклонён: `HTTP 422: Actions has been disabled for this user.` Текущий статус проверяйте по фактическим запускам. Успешная проверка Windows CI, установки Windows Desktop и OAuth в этом документе не заявляется.
+GitHub Actions настроен на Linux/macOS/Windows. Запуск был отклонён 27 октября и повторно после этого обновления **11 ноября**: `HTTP 422: Actions has been disabled for this user.` Actions разрешён в настройках репозитория, но ограничение аккаунта всё ещё мешает запуску. Успешная проверка Windows CI, установки Windows Desktop и OAuth в этом документе не заявляется.
 
 ## Reproduce / Повторить
 
