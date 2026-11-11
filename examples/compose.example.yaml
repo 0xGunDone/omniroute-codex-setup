@@ -1,7 +1,7 @@
 # Real installation: setup.py server generates fresh secrets in private .env.
 services:
   omniroute:
-    image: diegosouzapw/omniroute:3.8.52
+    image: diegosouzapw/omniroute:3.8.53@sha256:b52a17661a1aff42ffb78f349f423e986dfc55b57274f28559f8387622ef8ee4
     restart: unless-stopped
     stop_grace_period: 60s
     ports:

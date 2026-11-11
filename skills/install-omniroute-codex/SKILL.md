@@ -1,11 +1,13 @@
 ---
 name: install-omniroute-codex
-description: Use when installing OmniRoute or connecting Codex Desktop, CLI, or VS Code to an OmniRoute gateway while retaining existing local chats and model choices.
+description: Use when installing OmniRoute or connecting Codex Desktop, CLI, or VS Code to an OmniRoute gateway while retaining local chats, projects and model choices, including recovery of an empty Projects sidebar after an API-key profile switch.
 ---
 
 # Install OmniRoute for Codex
 
 Use the bundled `scripts/setup.py` through `uv run`. It generates a loopback-only Docker installation or performs a reversible Codex switch. Scripts require Python 3.11+ and pinned tomlkit; `uv` resolves the dependency.
+
+The new-server path pins stable OmniRoute 3.8.53 and its multi-platform image digest. Existing installations need a separate, backed-up upgrade; do not put old compiled JS overlays onto a new image.
 
 ## Scope and route
 
@@ -21,10 +23,12 @@ For server installation, read [server.md](references/server.md). For the client 
 - Select exact old provider IDs with repeated `--from-provider`; no blanket SQL update. The script changes only `threads.model_provider`, including archives, and leaves transcripts, IDs, pins and other providers intact. SQLite is an internal schema: stop on unknown schema or a newer database, not guess.
 - Preserve sandbox/approval/MCP/plugin settings. No access escalation, prompt injection into catalogs, fabricated subscriptions, or promise that listing a model proves access. Native image/web tools need compatible client AND server; opt into `--native-tools` only after reading the version notes.
 - `gpt-5.1-codex-mini` is excluded, including diagnostic probes. Never request it. New subagents use the selected allowed model, not an older fallback.
-- Before completion verify a completed inference marker, model list, one old chat plus one archived chat, and any requested native tool. HTTP 200 without completion is insufficient. If OAuth/captcha/login is required, let the user complete that step privately; continue afterward.
+- Before completion verify a completed inference marker, model list, Projects sidebar, one old chat plus one archived chat, pins and any requested native tool. HTTP 200 or route existence without completion is insufficient. If OAuth/captcha/login is required, let the user complete that step privately; continue afterward.
 
 ## Recovery and report
 
-The script saves auth/config/catalog and a consistent state snapshot before apply. Prefer `restore --backup PATH`: it restores original provider IDs without replacing later chat contents, and refuses conflicting later config edits. After an interruption, inspect the private manifest before rerunning; writes across files and SQLite are not crash-atomic.
+The script saves auth/config/catalog, both `.codex-global-state.json` files if present, and a consistent state snapshot before apply. Prefer `restore --backup PATH`: it restores original provider IDs without replacing later chat contents, and refuses conflicting later config edits. Sidebar backups are for selective recovery, never an automatic replacement of newer state. After an interruption, inspect the private manifest before rerunning; writes across files and SQLite are not crash-atomic.
+
+If API-key-only Desktop shows Recents/Pinned but an empty Projects section, read the recovery section in [client.md](references/client.md). Inspect with `uv run scripts/setup.py repair-projects --codex-home /ABSOLUTE/CODEX_HOME`. Apply only for the documented single-owner local-project layout and only with the client fully stopped. Keep the complete saved-profile envelope in the backup: removing just that envelope from the active local profile is necessary on the affected build, because restoring projects while retaining it makes startup hide them again. Do not fabricate account identity, copy another account's cloud state, alter login tokens, patch the app binary, or silently downgrade the app. Verify the projects after reopening before claiming recovery.
 
 Report exact server URL, selected model, number of migrated chats, private backup path, checks passed and any untested feature. Never publish credentials. Do not claim that cloud chats or all upstream entitlements were migrated.

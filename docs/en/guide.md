@@ -1,8 +1,8 @@
 # OmniRoute + Codex: install and switch without deleting chats
 
-[Русский](../ru/guide.md) · [Home](../../README.md) · Checked: **27 October 2026**
+[Русский](../ru/guide.md) · [Home](../../README.md) · Updated: **11 November 2026** · [Validation](../VALIDATION.md)
 
-For your own OmniRoute gateway and Codex Desktop / CLI / VS Code extension. Configure Codex **directly through `auth.json` and `config.toml`**; an account manager is optional. Retain local conversations, archives, pins, MCP settings and permission settings. The separate [agent skill](../../skills/install-omniroute-codex/SKILL.md) can carry out the setup.
+For your own OmniRoute gateway and Codex Desktop / CLI / VS Code extension. Configure Codex **directly through `auth.json` and `config.toml`**; an account manager is optional. Retain local conversations, projects, archives, pins, MCP settings and permission settings. The separate [agent skill](../../skills/install-omniroute-codex/SKILL.md) can carry out the setup.
 
 **Scope:** preserving local data does not preserve every ChatGPT product feature. Actual model access depends on the upstream account, subscription, quota and router-key policy. A model catalog does not grant a subscription. This does not migrate cloud chats between accounts. Codex's internal SQLite schema can change; the installer stops on unknown schemas.
 
@@ -65,7 +65,7 @@ The script generates unique `INITIAL_PASSWORD`, `JWT_SECRET`, `API_KEY_SECRET` a
 ~/omniroute-server/
 ├── .env             # SECRETS: never commit or share
 ├── .gitignore
-└── compose.yaml     # pinned 3.8.52 image, localhost:20128
+└── compose.yaml     # pinned 3.8.53 image + digest, localhost:20128
 ```
 
 Persistent data lives in the Compose project's named `omniroute-data` volume, mounted at `/app/data`. Docker adds the project prefix to the volume name; inspect `docker compose config --volumes`. Do not run `docker compose down -v` if you need to retain accounts.
@@ -93,7 +93,7 @@ Add providers in the dashboard. For Codex plan usage, choose the direct Codex OA
 
 ## 3. Codex account and OmniRoute key
 
-Screenshots come from an isolated, clean **3.8.52** demo with no personal accounts. Demo port21280 is only for screenshot isolation; normal commands use20128. Labels can differ between builds.
+Screenshots come from an isolated, clean **3.8.52** demo with no personal accounts. Demo port 21280 is only for screenshot isolation; normal commands use 20128. Version 3.8.53 uses Keak UI Kit / Editions: colors and button placement may differ. Screenshots illustrate the setup flow, not the current theme.
 
 ![EN: Codex provider page](../screenshots/en-01-codex-provider.png)
 
@@ -123,6 +123,7 @@ Do not run “test every model” for this guide: it generates many upstream cal
 | `config.toml` | merge carefully | Provider, URL, model and reasoning |
 | `auth.json` | replace active login after backup | Router API key |
 | `omniroute-model-catalog.json` | generate | Native Codex model metadata and reasoning choices |
+| `.codex-global-state.json` and `.codex-global-state.json.bak` | back up privately | Local projects, chat assignments and sidebar; do not overwrite with an older whole file |
 | `state_N.sqlite`, `-wal`/`-shm` | consistent backup; targeted SQL only with client stopped | Metadata and provider binding for existing chats |
 | `sessions/`, `archived_sessions/`, history, attachments | **do not delete or rewrite** | Local conversation contents |
 | `AGENTS.md`, MCP, plugins, permissions | retain | Your instructions and access settings |
@@ -168,6 +169,22 @@ The installer downloads a **SHA256-verified, pinned public openai/codex snapshot
 
 Single-entry format: [model-catalog.example.json](../../examples/model-catalog.example.json). This is a reduced structural example, not a replacement for the full native-tool metadata catalog. Use the generator for an actual installation.
 
+### Profile in CodexAcc or another account manager
+
+An account manager is optional. If you use one, create an `OmniRoute` profile with API-key authentication. Field names vary by version; the resulting files must match the examples above.
+
+| Setting | Value |
+|---|---|
+| Data directory | The same `CODEX_HOME` that contains your chats and projects |
+| Provider ID | `omniroute` |
+| API key | Your OmniRoute router key, not an upstream OAuth token |
+| Base URL | `http://127.0.0.1:20128/v1` through a tunnel, or your HTTPS URL ending in `/v1` |
+| API | Responses |
+| Model / reasoning | Exact ID from `/models`; default `codex/gpt-6.1-sol` / `max` |
+| Model catalog | Absolute path to the generated `omniroute-model-catalog.json` |
+
+Do not create an empty `CODEX_HOME` merely to switch keys: it will not contain your previous local chats. If the manager only stores auth, set the provider and catalog in `config.toml`. Privately inspect both files after activation. Keep manager settings consistent with the helper; switching profiles again may restore an older config. Preserve existing MCP, permissions and AGENTS.md.
+
 ## 5. Preflight, backup and client switch
 
 Without `--key-file`, the script prompts privately for the key in a terminal. For an agent, prepare a private key file; the agent must not print its contents.
@@ -202,7 +219,7 @@ Example result:
 }
 ```
 
-The count12 is illustrative. Backup includes original auth/config/catalog files, a consistent SQLite snapshot and a manifest of previous provider IDs. It is never committed. Legacy `[profiles]` and `openai_base_url` require review before the script proceeds. Also inspect project/managed settings, which can override user defaults.
+The count 12 is illustrative. Backup includes auth/config/catalog, both `.codex-global-state.json` files when present, a consistent SQLite snapshot and a manifest of previous provider IDs. Normal `restore` does not overwrite newer project state with those saved files. Keep backups private and uncommitted. Review legacy `[profiles]`/`openai_base_url` first; project/managed settings can override defaults.
 
 ## 6. Migrating existing chats
 
@@ -226,7 +243,7 @@ Expected result: the same old and archived chats remain visible with unchanged I
 
 - Catalog listing is not entitlement. A completed inference with the expected marker verifies access for that request.
 - Exact IDs matter: `codex/gpt-6.1-sol` and `openrouter/openai/gpt-6.1-sol` have separate routing, quotas and billing.
-- `max`/`ultra` must be supported by the selected model/provider. Do not invent reasoning levels. Repository default: **6.1 Sol / max**.
+- Default: **6.1 Sol / max**. In the checked Codex route for GPT‑6.1 Sol/Terra, client `ultra` maps to upstream `max`; a separate higher wire effort was not established. A UI label does not prove a different upstream mode. Check metadata and the actual request for other models.
 - `--subagents` sets the model/effort for new subagents. Explicit agent overrides take priority. Update any existing Astra-specific AGENTS.md instructions separately; the installer does not rewrite them.
 - Fast (`service_tier = "priority"`) depends on client metadata, account and upstream support. A picker entry does not prove it works. It is not enabled or promised automatically.
 
@@ -253,19 +270,47 @@ Server requirements:
 | Editing | `POST /v1/images/edits` |
 | Native web.run | `POST /v1/alpha/search` |
 
-`/v1/alpha/search` and OmniRoute `/v1/search` use different protocols; rewriting one to the other in nginx does not provide compatibility. The clean3.8.52 image checked for this guide exposes native search: an empty request returns400 validation, not404. Actual search/image inference and account access must be tested separately. Older builds sharing the same version string can differ; do not blindly copy minified-JS patches from someone else's installation.
+`/v1/alpha/search` and OmniRoute `/v1/search` use different protocols; an nginx rewrite does not provide compatibility. The stock adapter in the checked 3.8.53 build handles `search_query`; this is not full `web.run` support for `open`/`find`/`click`/`screenshot` and encrypted-state replay. Route presence and HTTP 400 for an empty request prove validation only.
 
-If a native tool disappears, fully restart the client. A failed generation returning429/401/400 means no image was created: retain the technical code and inspect logs privately. Do not silently change prompt, provider or model.
+Full native search and built-in `image_gen` generation/reference editing were checked on 11 November in a separate 3.8.53 deployment **with additional fixes**. The helper does not install those overlays. Test the operations you need against your client/gateway/account. Do not copy minified-JS patches between Docker digests without adapting and checking them.
+
+If a native tool disappears, fully restart the client. Use built-in `image_gen` for images; substitute a shell/API script only if the user chooses it. On 429/401/400, no image was created: retain the technical code and inspect logs privately. Do not silently change prompt, provider or model.
+
+For `Combo "gpt-image-2" has no usable targets`, check combo membership, key/account permissions and **Image visibility**. A model hidden in Chat can still be allowed for Image. Check both generations and edits resolvers; fixing generation alone does not fix reference edits. Do not expose every model in Chat to bypass this. The `gpt-image-2` combo name is a routing alias, not proof of a specific upstream image engine.
 
 ## 8. Validation, rollback and upgrades
 
 After restarting Codex:
 
 1. Verify the selected model and reasoning levels in the picker.
-2. Open one old chat and one archived chat; check pins.
+2. Check that Projects lists the previous local projects; open one old chat and one archived chat and check pins.
 3. Complete one short response and inspect server provider/model metadata.
 4. Check that permissions/MCP remain intact.
 5. Test native search/image **if you enabled and need them**. Image tests consume quota; use one harmless example, not a batch retry.
+
+### If Projects disappear after switching profiles
+
+Observed in Codex Desktop **0.167.0-alpha.3.2**: after switching from ChatGPT OAuth to API-key authentication, Projects becomes empty while Recents and Pinned remain. Local projects may still exist inside `electron-account-renderer-state-v1` in `.codex-global-state.json`. On the affected build, startup clears the active collection again while this migration envelope exists. Copying project lists without addressing that cause does not fix it.
+
+Inspect from this repository's root:
+
+```sh
+uv run skills/install-omniroute-codex/scripts/setup.py repair-projects
+```
+
+This local inspection makes no network requests, consumes no quota and writes no files; output includes project/assignment counts. For a custom home, add `--codex-home "/ABSOLUTE/CODEX_HOME"`.
+
+To apply, fully quit Codex/ChatGPT Desktop, CLI and the VS Code extension. Then run in an **external** Terminal/PowerShell:
+
+```sh
+uv run skills/install-omniroute-codex/scripts/setup.py repair-projects --apply
+```
+
+The command creates a private backup, merges only known local-project fields and project UI settings, keeps current entries on conflicts, and removes the migration envelope **from active state**. The complete original envelope stays in the backup. It does not edit `auth.json`, config, chat databases or transcripts. Normal `client --apply` does not automatically run this repair.
+
+Only API-key authentication without OAuth `tokens`, `owner: null` and one saved collection of local projects with the known structure are supported. Multiple owners, cloud-backed projects and unknown schemas cause a refusal; do not remove these checks. This addresses one observed migration, not every future version. Do not fabricate account identity, patch the app binary or copy an older whole SQLite database/UI state over newer data.
+
+Optional `--wait-for-exit 120` waits for you to quit; it does not close the app. If quitting flushes changed state, the helper refuses to apply its stale plan: rerun after the app is fully closed. Reopen and verify Projects, chat membership, archives and pins. If Projects empties again, keep the backup and investigate the new schema instead of deleting fields repeatedly. A backup marked `kind: project-repair` retains the original sidebar files for selective manual recovery; `restore` only accepts normal client backups and will not apply it.
 
 ### Rollback
 
@@ -282,9 +327,9 @@ File writes and SQLite updates are not one crash-atomic transaction. After power
 
 ### OmniRoute upgrades
 
-The `server` setup command is for a new empty installation, not a live upgrade. Back up the volume, `.env`, exact image/digest and drain requests first. **Keep encrypted storage and its encryption secret together.** After backup, change the pinned tag, run `docker compose pull && docker compose up -d`, and verify models/Responses/required tools. Rolling back a data-schema migration may require restoring its matching data backup, not only the old image.
+The `server` command is for an empty installation directory. Before upgrading, stop new requests, drain active ones, and back up a consistent volume, `.env`, the exact image/digest and mounts/overlays. **Keep encrypted storage and its encryption secret together.** Rebase local fixes onto the new digest and test against a separate data copy; do not reuse old compiled chunks blindly. After backup, change the Compose image, run `docker compose pull`, then `docker compose up -d`. Verify health, key-scoped models, completed Responses, effort and required tools; test image generation and reference editing separately. A data-schema rollback may need its matching backup, not only the old image.
 
-At the time checked, latest stable release was3.8.52. Pin a version or digest; `next` is a prerelease channel.
+As of 11 November 2026, latest stable is **3.8.53**. The helper and [Compose example](../../examples/compose.example.yaml) pin the version and digest. `next` is a prerelease channel.
 
 ## 9. Troubleshooting
 
@@ -295,6 +340,8 @@ At the time checked, latest stable release was3.8.52. Pin a version or digest; `
 |400 unsupported model|The selected upstream account lacks model/subscription access; a listing is not proof.|
 |Missing models|Native catalog format, absolute path, hidden filters, key scope and restart.|
 |Missing old chats|Actual CODEX_HOME and SQLite provider bindings; do not delete sessions or DB.|
+|Empty Projects, Recents/Pinned remain|Check the [known API-key profile migration](#if-projects-disappear-after-switching-profiles); start with `repair-projects` without `--apply`.|
+|400 `Combo "gpt-image-2" has no usable targets`|Combo targets, key/account scope and Image visibility; check generations and edits separately.|
 |404 `unknown_route` on `/alpha/search`|Gateway build lacks native route support. Do not alias it to `/search`.|
 |413 nginx|Adjust `client_max_body_size` on your reverse proxy; also check gateway body/memory limits.|
 |503 resource pressure|RAM, heap, queue and concurrency. Avoid endless retries.|
@@ -327,7 +374,7 @@ Restart Codex and ask:
 ```text
 Use $install-omniroute-codex.
 Install OmniRoute and connect my Codex directly through auth.json/config.toml.
-Keep local chats, archives, pins, MCP and my existing permission settings.
+Keep local chats, projects, archives, pins, MCP and my existing permission settings.
 Use codex/gpt-6.1-sol with max for the main agent and new subagents.
 Inspect the environment, prepare backup and run preflight first.
 Do not print tokens. If active Codex prevents the migration,
@@ -338,8 +385,8 @@ You can give an agent this repository URL and ask it to install the skill. Clone
 
 ## Sources and checked compatibility
 
-- [OmniRoute stable v3.8.52](https://github.com/cheaper-inference/OmniRoute/releases/tag/v3.8.52), source commit `ad6f33f66bda34eba98645d3bfdabbde294bc843`.
-- Checked Docker multi-platform digest: `sha256:b08a12e876baa8a5ccadd1ebbe346fe7267dba3b1c9f4fd6bb02070fae41ab6c`.
+- [OmniRoute stable v3.8.53](https://github.com/cheaper-inference/OmniRoute/releases/tag/v3.8.53), published 6 November 2026.
+- Pinned Docker multi-platform digest: `sha256:b52a17661a1aff42ffb78f349f423e986dfc55b57274f28559f8387622ef8ee4`.
 - [Advanced configuration / custom providers](https://developers.openai.com/codex/config-advanced), [config reference](https://developers.openai.com/codex/config-reference), [authentication](https://developers.openai.com/codex/auth).
 - [Pinned official Codex metadata](https://github.com/openai/codex/blob/716b4ec6dffc7b23b1c598400bccb622551bf787/codex-rs/models-manager/models.json).
 - [Native search client](https://github.com/openai/codex/blob/716b4ec6dffc7b23b1c598400bccb622551bf787/codex-rs/codex-api/src/endpoint/search.rs).

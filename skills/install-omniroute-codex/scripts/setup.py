@@ -30,13 +30,26 @@ from pathlib import Path
 
 import tomlkit
 
-IMAGE = "diegosouzapw/omniroute:3.8.52"
+IMAGE = "diegosouzapw/omniroute:3.8.53@sha256:b52a17661a1aff42ffb78f349f423e986dfc55b57274f28559f8387622ef8ee4"
 CATALOG_COMMIT = "716b4ec6dffc7b23b1c598400bccb622551bf787"
 CATALOG_URL = f"https://raw.githubusercontent.com/openai/codex/{CATALOG_COMMIT}/codex-rs/models-manager/models.json"
 CATALOG_SHA256 = "943ca7fe1d19ed019054158303f0dbbd80b3bef43b3aa425a71aa7cb3fb52c2b"
 MAX_BODY = 32 * 1024 * 1024
 BLOCKED = "gpt-5.1-codex-mini"
 MANAGED_FILES = ("config.toml", "auth.json", "omniroute-model-catalog.json")
+SIDEBAR_FILES = (".codex-global-state.json", ".codex-global-state.json.bak")
+PROJECT_GLOBALS = {
+    "local-projects", "active-workspace-roots", "electron-saved-workspace-roots",
+    "electron-workspace-root-labels", "app-server-project-id-by-legacy-project-id-by-host",
+    "app-server-projects-migration-by-host", "selected-project", "project-appearances",
+    "pinned-project-ids", "sidebar-project-thread-orders", "thread-project-assignments",
+    "thread-project-membership-host-ids", "thread-writable-roots", "thread-workspace-root-hints",
+    "thread-projectless-output-directories", "projectless-thread-ids", "project-order",
+}
+PROJECT_ATOMS = {
+    "unified-sidebar-project-order-v1", "sidebar-project-list-expanded-v1",
+    "sidebar-collapsed-groups", "sidebar-collapsed-sections-v1", "flat-project-sidebar-preferences-v1",
+}
 
 
 class SetupError(Exception):
@@ -332,12 +345,23 @@ def backup(home, path, rows):
             data = src.read_bytes()
             atomic_write(folder / name, data)
             files[name]["before_sha256"] = hashlib.sha256(data).hexdigest()
+    preserved = {}
+    # UI/project state needs a backup before switching auth, but must never be
+    # replaced wholesale by normal restore after newer chats/projects exist.
+    for name in SIDEBAR_FILES:
+        src = home / name
+        if src.is_symlink():
+            raise SetupError("Sidebar state must not be a symlink")
+        if src.exists():
+            data = src.read_bytes()
+            atomic_write(folder / name, data)
+            preserved[name] = {"sha256": hashlib.sha256(data).hexdigest()}
     if path:
         with closing(connect_db(path, True)) as src, closing(sqlite3.connect(folder / "state-snapshot.sqlite")) as dest:
             src.backup(dest)
         restrict(folder / "state-snapshot.sqlite")
     manifest = {"home": str(home), "database": path.name if path else None, "rows": rows,
-                "files": files, "status": "prepared"}
+                "files": files, "preserved_files": preserved, "status": "prepared"}
     atomic_write(folder / "manifest.json", dump(manifest))
     return folder, manifest
 
@@ -428,6 +452,113 @@ def restore(args):
     print("Restored authentication/config and original provider IDs; newer chats were kept.")
 
 
+def repaired_project_state(current):
+    """Narrow workaround for the observed Desktop API-key migration reset."""
+    envelope_key = "electron-account-renderer-state-v1"
+    envelope = current.get(envelope_key)
+    if not isinstance(envelope, dict) or set(envelope) != {"owner", "inactive"}:
+        raise SetupError("Unrecognized sidebar migration state; no repair attempted")
+    if envelope["owner"] is not None:
+        raise SetupError("A signed-in profile owns this state; use that account, not API-key recovery")
+    inactive = envelope["inactive"]
+    if not isinstance(inactive, dict) or len(inactive) != 1:
+        raise SetupError("Expected one saved profile; multiple/unknown owners require manual review")
+    saved = next(iter(inactive.values()))
+    if not isinstance(saved, dict) or set(saved) != {"atoms", "globals"} or not all(
+        isinstance(saved[k], dict) for k in ("atoms", "globals")
+    ):
+        raise SetupError("Unknown saved-profile schema; no repair attempted")
+    if not saved["globals"].get("local-projects"):
+        raise SetupError("Saved local projects are missing")
+    for collection in (saved["globals"], current):
+        projects = collection.get("local-projects", {})
+        if not isinstance(projects, dict) or any(
+            not isinstance(p, dict) or p.get("id") != pid or not isinstance(p.get("name"), str)
+            or not isinstance(p.get("rootPaths"), list)
+            or not all(isinstance(root, str) for root in p["rootPaths"])
+            for pid, p in projects.items()
+        ):
+            raise SetupError("Local projects have an unknown schema")
+        if any(p.get("chatGptBacking") or p.get("chatGptBackingCreation") for p in projects.values()):
+            raise SetupError("Cloud-backed projects need their original sign-in; no API-key repair attempted")
+        assignments = collection.get("thread-project-assignments", {})
+        if not isinstance(assignments, dict) or not all(isinstance(v, str) for v in assignments.values()):
+            raise SetupError("Unknown project-assignment schema; no repair attempted")
+    result = copy.deepcopy(current)
+    for key in PROJECT_GLOBALS:
+        if key not in saved["globals"]:
+            continue
+        previous, active = saved["globals"][key], result.get(key)
+        if active is not None and type(active) is not type(previous):
+            raise SetupError("Project state types changed; review the schema before repair")
+        if isinstance(previous, dict) and isinstance(active, dict):
+            result[key] = {**copy.deepcopy(previous), **active}
+        elif active is None or active == []:
+            result[key] = copy.deepcopy(previous)
+    atoms = result.setdefault("electron-persisted-atom-state", {})
+    if not isinstance(atoms, dict):
+        raise SetupError("Unknown persisted UI schema; no repair attempted")
+    for key, value in saved["atoms"].items():
+        if key in PROJECT_ATOMS or key.startswith("sidebar-project-expanded-v1-codex:"):
+            atoms.setdefault(key, copy.deepcopy(value))
+    # The affected build's constructor calls selectRendererOwner(null) when
+    # this envelope exists. Retaining it would clear the recovered projects at
+    # every restart. The complete envelope stays in the private backup.
+    result.pop(envelope_key)
+    return result
+
+
+def repair_projects(args):
+    home = args.codex_home.expanduser().resolve()
+    path = home / SIDEBAR_FILES[0]
+    if path.is_symlink():
+        raise SetupError("Sidebar state must not be a symlink")
+    auth_path = home / "auth.json"
+    auth_raw = auth_path.read_bytes()
+    auth = json.loads(auth_raw)
+    if (not isinstance(auth, dict) or not isinstance(auth.get("OPENAI_API_KEY"), str)
+            or not auth["OPENAI_API_KEY"].strip() or auth.get("tokens")):
+        raise SetupError("Project repair is only for API-key-only authentication")
+    raw = path.read_bytes()
+    if len(raw) > MAX_BODY:
+        raise SetupError("Sidebar state exceeds the supported size")
+    current = json.loads(raw)
+    if not isinstance(current, dict):
+        raise SetupError("Unknown sidebar state schema")
+    fixed = repaired_project_state(current)
+    summary = {"projects": len(fixed["local-projects"]),
+               "thread_assignments": len(fixed.get("thread-project-assignments", {})),
+               "apply": args.apply, "account_auth_changed": False}
+    if not args.apply:
+        print(json.dumps(summary, indent=2))
+        return
+    require_stopped(args.wait_for_exit)
+    # Quit may flush newer state. Do not replace that newer file with a stale plan.
+    if path.read_bytes() != raw or auth_path.read_bytes() != auth_raw:
+        raise SetupError("Sidebar or authentication changed while closing; run repair-projects again")
+    folder, manifest = backup(home, None, [])
+    manifest["kind"] = "project-repair"
+    atomic_write(folder / "manifest.json", dump(manifest))
+    require_stopped()
+    if path.read_bytes() != raw or auth_path.read_bytes() != auth_raw:
+        raise SetupError("Sidebar or authentication changed before write; no repair applied")
+    try:
+        for name in SIDEBAR_FILES:
+            atomic_write(home / name, dump(fixed))
+    except BaseException:
+        for name in SIDEBAR_FILES:
+            src = folder / name
+            if src.exists():
+                atomic_write(home / name, src.read_bytes())
+            else:
+                (home / name).unlink(missing_ok=True)
+        raise
+    manifest["status"] = "project-repair-applied"
+    atomic_write(folder / "manifest.json", dump(manifest))
+    summary["backup"] = str(folder)
+    print(json.dumps(summary, indent=2))
+
+
 def server(args):
     folder = args.directory.expanduser().resolve()
     if folder.exists() and any(folder.iterdir()):
@@ -494,12 +625,17 @@ def main():
     rst.add_argument("--backup", type=Path, required=True)
     rst.add_argument("--wait-for-exit", type=int, default=0)
     rst.set_defaults(func=restore)
+    repair = sub.add_parser("repair-projects", help="Inspect/repair the known API-key Desktop sidebar migration")
+    repair.add_argument("--codex-home", type=Path, default=Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))))
+    repair.add_argument("--apply", action="store_true")
+    repair.add_argument("--wait-for-exit", type=int, default=0)
+    repair.set_defaults(func=repair_projects)
     args = parser.parse_args()
     try:
         if args.command == "server" and (not 1024 <= args.port <= 65535 or args.heap_mb < 512 or args.memory_gb * 1024 < args.heap_mb + 1024):
             raise SetupError("Use port 1024..65535 and leave at least 1 GiB above the V8 heap")
         args.func(args)
-    except (SetupError, OSError, sqlite3.Error, subprocess.CalledProcessError):
+    except (SetupError, OSError, ValueError, sqlite3.Error, subprocess.CalledProcessError):
         # No traceback/config/parser diagnostics: those can contain credentials.
         error = sys.exc_info()[1]
         message = str(error) if isinstance(error, SetupError) else "Operation failed; inspect local files privately. No credentials were printed."

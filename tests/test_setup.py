@@ -28,6 +28,18 @@ TEMPLATE = {"models": [{"slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol",
 API = {"data": [{"id": MODEL}, {"id": "codex/gpt-6-luna"}]}
 
 
+def sidebar_fixture():
+    projects = {"demo-project": {"id": "demo-project", "name": "Example project",
+                                "rootPaths": ["/example/project"]}}
+    return {"thread-titles": {"current": "Keep this chat"}, "pinned-thread-ids": ["current"],
+            "electron-persisted-atom-state": {"onboarding": True},
+            "electron-account-renderer-state-v1": {"owner": None, "inactive": {"synthetic-owner": {
+                "globals": {"local-projects": projects, "thread-project-assignments": {"archived": "demo-project"},
+                            "project-order": ["demo-project"], "pinned-thread-ids": ["outdated-pin"]},
+                "atoms": {"sidebar-project-list-expanded-v1": True,
+                          "unrelated-account-data": "do not restore", "unified-sidebar-pinned-order-v1": ["outdated-pin"]}}}}}
+
+
 class SetupTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -228,6 +240,160 @@ class SetupTests(unittest.TestCase):
             self.assertEqual((folder / ".env").stat().st_mode & 0o777, 0o600)
         with self.assertRaises(setup.SetupError):
             setup.server(args)
+
+    def test_client_backup_retains_sidebar_bytes_and_restore_keeps_later_projects(self):
+        original = setup.dump(sidebar_fixture())
+        (self.home / ".codex-global-state.json").write_bytes(original)
+        folder = self.apply()
+        self.assertEqual((folder / ".codex-global-state.json").read_bytes(), original)
+        self.assertEqual((self.home / ".codex-global-state.json").read_bytes(), original)
+        changed = setup.dump({"local-projects": {"later": {"name": "Created after setup"}}})
+        (self.home / ".codex-global-state.json").write_bytes(changed)
+        with patch.object(setup, "client_running", return_value=False):
+            setup.restore(argparse.Namespace(backup=folder, wait_for_exit=0))
+        self.assertEqual((self.home / ".codex-global-state.json").read_bytes(), changed)
+
+    def prepare_sidebar_repair(self):
+        state = sidebar_fixture()
+        (self.home / ".codex-global-state.json").write_bytes(setup.dump(state))
+        (self.home / ".codex-global-state.json.bak").write_bytes(setup.dump(state))
+        (self.home / "auth.json").write_bytes(setup.dump({"OPENAI_API_KEY": FAKE_KEY}))
+        return argparse.Namespace(codex_home=self.home, apply=False, wait_for_exit=0)
+
+    def test_project_recovery_dry_run_does_not_write_or_use_network(self):
+        args = self.prepare_sidebar_repair()
+        before = {p.name: p.read_bytes() for p in self.home.iterdir() if p.is_file()}
+        with patch.object(setup, "request_json") as network:
+            setup.repair_projects(args)
+            network.assert_not_called()
+        self.assertFalse((self.home / "omniroute-backups").exists())
+        self.assertEqual(before, {p.name: p.read_bytes() for p in self.home.iterdir() if p.is_file()})
+
+    def test_project_recovery_preserves_auth_pins_chats_and_backup(self):
+        args = self.prepare_sidebar_repair()
+        old = (self.home / ".codex-global-state.json").read_bytes()
+        auth = (self.home / "auth.json").read_bytes()
+        before_rows = self.rows()
+        args.apply = True
+        with patch.object(setup, "client_running", return_value=False):
+            setup.repair_projects(args)
+        fixed = json.loads((self.home / ".codex-global-state.json").read_text())
+        self.assertEqual(len(fixed["local-projects"]), 1)
+        self.assertEqual(fixed["thread-project-assignments"], {"archived": "demo-project"})
+        self.assertEqual(fixed["pinned-thread-ids"], ["current"])
+        self.assertEqual(fixed["thread-titles"], {"current": "Keep this chat"})
+        self.assertEqual(fixed["electron-persisted-atom-state"], {"onboarding": True, "sidebar-project-list-expanded-v1": True})
+        self.assertNotIn("electron-account-renderer-state-v1", fixed)
+        self.assertEqual((self.home / "auth.json").read_bytes(), auth)
+        self.assertEqual(self.rows(), before_rows)
+        folder = next((self.home / "omniroute-backups").iterdir())
+        self.assertEqual((folder / ".codex-global-state.json").read_bytes(), old)
+        self.assertEqual(json.loads((folder / "manifest.json").read_text())["status"], "project-repair-applied")
+        self.assertEqual((self.home / ".codex-global-state.json.bak").read_bytes(), (self.home / ".codex-global-state.json").read_bytes())
+
+    def test_project_merge_keeps_newer_assignments_and_projects(self):
+        state = sidebar_fixture()
+        state["thread-project-assignments"] = {"archived": "new-project", "later": "new-project"}
+        state["local-projects"] = {"new-project": {"id": "new-project", "name": "New", "rootPaths": []}}
+        before = copy.deepcopy(state)
+        result = setup.repaired_project_state(state)
+        self.assertEqual(state, before)
+        self.assertEqual(result["thread-project-assignments"], state["thread-project-assignments"])
+        self.assertEqual(set(result["local-projects"]), {"demo-project", "new-project"})
+
+    def test_project_recovery_rejects_unknown_multiple_or_signed_in_profiles(self):
+        for kind in ("signed-in", "multiple", "future-schema", "no-projects", "cloud-backed"):
+            state = sidebar_fixture()
+            envelope = state["electron-account-renderer-state-v1"]
+            saved = envelope["inactive"]["synthetic-owner"]
+            if kind == "signed-in": envelope["owner"] = "currently-signed-in"
+            elif kind == "multiple": envelope["inactive"]["other-owner"] = copy.deepcopy(saved)
+            elif kind == "future-schema": envelope["new-field"] = True
+            elif kind == "no-projects": saved["globals"]["local-projects"] = {}
+            else: saved["globals"]["local-projects"]["demo-project"]["chatGptBacking"] = {"projectId": "cloud-project"}
+            with self.subTest(kind=kind), self.assertRaises(setup.SetupError):
+                setup.repaired_project_state(state)
+
+    def test_project_recovery_refuses_oauth_and_running_client(self):
+        args = self.prepare_sidebar_repair()
+        args.apply = True
+        with patch.object(setup, "client_running", return_value=True), self.assertRaises(setup.SetupError):
+            setup.repair_projects(args)
+        self.assertFalse((self.home / "omniroute-backups").exists())
+        (self.home / "auth.json").write_bytes(setup.dump({"tokens": {"access_token": "demo-only"}}))
+        with self.assertRaises(setup.SetupError): setup.repair_projects(args)
+
+    def test_project_recovery_closing_flush_is_not_overwritten(self):
+        args = self.prepare_sidebar_repair()
+        args.apply = True
+        def closing_flush(wait):
+            (self.home / ".codex-global-state.json").write_bytes(b'{"newer":"flushed"}')
+        with patch.object(setup, "require_stopped", side_effect=closing_flush), self.assertRaises(setup.SetupError):
+            setup.repair_projects(args)
+        self.assertEqual((self.home / ".codex-global-state.json").read_bytes(), b'{"newer":"flushed"}')
+        self.assertFalse((self.home / "omniroute-backups").exists())
+
+    def test_project_recovery_rolls_back_partial_state_write(self):
+        args = self.prepare_sidebar_repair()
+        args.apply = True
+        old = (self.home / ".codex-global-state.json").read_bytes()
+        writer = setup.atomic_write
+        failed = False
+        def fail_once(path, content, *rest):
+            nonlocal failed
+            if path == (self.home / ".codex-global-state.json.bak").resolve() and not failed:
+                failed = True
+                raise OSError("synthetic failure")
+            return writer(path, content, *rest)
+        with patch.object(setup, "client_running", return_value=False), patch.object(setup, "atomic_write", side_effect=fail_once), self.assertRaises(OSError):
+            setup.repair_projects(args)
+        self.assertEqual((self.home / ".codex-global-state.json").read_bytes(), old)
+        self.assertEqual((self.home / ".codex-global-state.json.bak").read_bytes(), old)
+
+    def test_project_recovery_rejects_changed_or_cloud_backed_active_layout(self):
+        for kind in ("cloud", "projects-type", "assignment-type", "field-type"):
+            state = sidebar_fixture()
+            if kind == "cloud":
+                state["local-projects"] = copy.deepcopy(state["electron-account-renderer-state-v1"]["inactive"]["synthetic-owner"]["globals"]["local-projects"])
+                state["local-projects"]["demo-project"]["chatGptBacking"] = {"projectId": "cloud"}
+            elif kind == "projects-type": state["local-projects"] = []
+            elif kind == "assignment-type": state["thread-project-assignments"] = []
+            else: state["project-order"] = {}
+            with self.subTest(kind=kind), self.assertRaises(setup.SetupError):
+                setup.repaired_project_state(state)
+
+    def test_project_recovery_refuses_malformed_or_changed_auth(self):
+        args = self.prepare_sidebar_repair()
+        auth_path = self.home / "auth.json"
+        for value in ([], {"OPENAI_API_KEY": 123}, {"OPENAI_API_KEY": " "}):
+            auth_path.write_bytes(setup.dump(value))
+            with self.subTest(value=value), self.assertRaises(setup.SetupError):
+                setup.repair_projects(args)
+        auth_path.write_bytes(setup.dump({"OPENAI_API_KEY": FAKE_KEY}))
+        original = (self.home / ".codex-global-state.json").read_bytes()
+        args.apply = True
+        def changed_auth(wait):
+            auth_path.write_bytes(setup.dump({"tokens": {"access_token": "demo-only"}}))
+        with patch.object(setup, "require_stopped", side_effect=changed_auth), self.assertRaises(setup.SetupError):
+            setup.repair_projects(args)
+        self.assertEqual((self.home / ".codex-global-state.json").read_bytes(), original)
+        self.assertFalse((self.home / "omniroute-backups").exists())
+
+    def test_project_recovery_rolls_back_new_backup_file_after_write_failure(self):
+        args = self.prepare_sidebar_repair()
+        args.apply = True
+        target = (self.home / ".codex-global-state.json.bak").resolve()
+        target.unlink()
+        original = (self.home / ".codex-global-state.json").read_bytes()
+        writer = setup.atomic_write
+        def fail_after_write(path, content, *rest):
+            writer(path, content, *rest)
+            if path == target:
+                raise OSError("synthetic failure after rename")
+        with patch.object(setup, "client_running", return_value=False), patch.object(setup, "atomic_write", side_effect=fail_after_write), self.assertRaises(OSError):
+            setup.repair_projects(args)
+        self.assertEqual((self.home / ".codex-global-state.json").read_bytes(), original)
+        self.assertFalse(target.exists())
 
 
 if __name__ == "__main__":
